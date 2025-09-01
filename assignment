@@ -1,0 +1,204 @@
+#include <bits/stdc++.h>
+#include <boost/multiprecision/cpp_int.hpp>
+using namespace std;
+using boost::multiprecision::cpp_int;
+
+// gcd for cpp_int (Euclidean)
+cpp_int cpp_gcd(cpp_int a, cpp_int b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b != 0) {
+        cpp_int r = a % b;
+        a = b;
+        b = r;
+    }
+    return a;
+}
+
+// Exact rational number with cpp_int numerator/denominator
+struct BigRat {
+    cpp_int num;
+    cpp_int den; // always > 0, reduced
+
+    BigRat(): num(0), den(1) {}
+    BigRat(const cpp_int &n): num(n), den(1) {}
+    BigRat(const cpp_int &n, const cpp_int &d): num(n), den(d) { normalize(); }
+
+    void normalize() {
+        if (den == 0) throw runtime_error("Zero denominator");
+        if (num == 0) { den = 1; return; }
+        if (den < 0) { num = -num; den = -den; }
+        cpp_int g = cpp_gcd(num, den);
+        if (g != 0) { num /= g; den /= g; }
+    }
+
+    bool isZero() const { return num == 0; }
+
+    // Operators
+    friend BigRat operator+(const BigRat &a, const BigRat &b) {
+        BigRat r;
+        r.num = a.num * b.den + b.num * a.den;
+        r.den = a.den * b.den;
+        r.normalize();
+        return r;
+    }
+    friend BigRat operator-(const BigRat &a, const BigRat &b) {
+        BigRat r;
+        r.num = a.num * b.den - b.num * a.den;
+        r.den = a.den * b.den;
+        r.normalize();
+        return r;
+    }
+    friend BigRat operator*(const BigRat &a, const BigRat &b) {
+        BigRat r;
+        r.num = a.num * b.num;
+        r.den = a.den * b.den;
+        r.normalize();
+        return r;
+    }
+    friend BigRat operator/(const BigRat &a, const BigRat &b) {
+        if (b.num == 0) throw runtime_error("Divide by zero BigRat");
+        BigRat r;
+        r.num = a.num * b.den;
+        r.den = a.den * b.num;
+        r.normalize();
+        return r;
+    }
+    friend bool operator==(const BigRat &a, const BigRat &b) {
+        return a.num == b.num && a.den == b.den;
+    }
+};
+
+// Convert a base-string into cpp_int (works for very large numbers)
+cpp_int baseToCppInt(const string &value, int base) {
+    cpp_int res = 0;
+    for (char ch : value) {
+        int digit;
+        if (isdigit(ch)) digit = ch - '0';
+        else digit = tolower(ch) - 'a' + 10;
+        res *= base;
+        res += digit;
+    }
+    return res;
+}
+
+// compute integer power as cpp_int: base^exp (exp >= 0 small)
+cpp_int pow_int_cpp(cpp_int base, int exp) {
+    cpp_int r = 1;
+    while (exp > 0) {
+        if (exp & 1) r *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return r;
+}
+
+// Solve exact rational system A x = b using Gaussian elimination
+vector<BigRat> gaussSolveExact(vector<vector<BigRat>> A, vector<BigRat> b) {
+    int n = (int)A.size();
+    for (int i = 0; i < n; ++i) {
+        // Find pivot (first nonzero row)
+        int pivot = -1;
+        for (int r = i; r < n; ++r) if (!A[r][i].isZero()) { pivot = r; break; }
+        if (pivot == -1) throw runtime_error("Singular matrix or insufficient independent points");
+        if (pivot != i) {
+            swap(A[i], A[pivot]);
+            swap(b[i], b[pivot]);
+        }
+
+        BigRat piv = A[i][i];
+        // Eliminate below
+        for (int r = i+1; r < n; ++r) {
+            if (A[r][i].isZero()) continue;
+            BigRat factor = A[r][i] / piv;
+            for (int c = i; c < n; ++c) A[r][c] = A[r][c] - factor * A[i][c];
+            b[r] = b[r] - factor * b[i];
+        }
+    }
+
+    // Back substitution
+    vector<BigRat> x(n);
+    for (int i = n-1; i >= 0; --i) {
+        BigRat sum = b[i];
+        for (int j = i+1; j < n; ++j) sum = sum - A[i][j] * x[j];
+        x[i] = sum / A[i][i];
+    }
+    return x;
+}
+
+// Build Vandermonde and solve for polynomial coefficients (c0..c_{k-1})
+vector<BigRat> solvePolynomialExact(map<string, map<string, string>> &data, int k) {
+    vector<pair<int, cpp_int>> pts;
+    for (auto &entry : data) {
+        if (entry.first == "keys") continue;
+        int x = stoi(entry.first);
+        int base = stoi(entry.second.at("base"));
+        string value = entry.second.at("value");
+        cpp_int y = baseToCppInt(value, base);
+        pts.push_back({x, y});
+    }
+    sort(pts.begin(), pts.end(), [](auto &a, auto &b){ return a.first < b.first; });
+    if ((int)pts.size() < k) throw runtime_error("Not enough points");
+    pts.resize(k);
+
+    int n = k;
+    vector<vector<BigRat>> A(n, vector<BigRat>(n));
+    vector<BigRat> B(n);
+    for (int i = 0; i < n; ++i) {
+        int xi = pts[i].first;
+        cpp_int xp = 1;
+        for (int j = 0; j < n; ++j) {
+            A[i][j] = BigRat(xp);
+            xp *= xi;
+        }
+        B[i] = BigRat(pts[i].second);
+    }
+
+    return gaussSolveExact(A, B);
+}
+
+void printCoeffs(const vector<BigRat> &coeff) {
+    for (size_t i = 0; i < coeff.size(); ++i) {
+        if (i) cout << " ";
+        if (coeff[i].den == 1) cout << coeff[i].num;
+        else cout << coeff[i].num << "/" << coeff[i].den;
+    }
+    cout << "\n";
+}
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    // -------- Testcase 1 (from you) --------
+    map<string, map<string, string>> data1;
+    data1["1"] = {{"base","10"},{"value","4"}};
+    data1["2"] = {{"base","2"},{"value","111"}};
+    data1["3"] = {{"base","10"},{"value","12"}};
+    data1["6"] = {{"base","4"},{"value","213"}};
+    int k1 = 3;
+
+    auto coeffs1 = solvePolynomialExact(data1, k1);
+    cout << "Testcase 1 coefficients: ";
+    printCoeffs(coeffs1);
+
+    // -------- Testcase 2 (from you) --------
+    map<string, map<string, string>> data2;
+    data2["1"]  = {{"base","6"},{"value","13444211440455345511"}};
+    data2["2"]  = {{"base","15"},{"value","aed7015a346d635"}};
+    data2["3"]  = {{"base","15"},{"value","6aeeb69631c227c"}};
+    data2["4"]  = {{"base","16"},{"value","e1b5e05623d881f"}};
+    data2["5"]  = {{"base","8"},{"value","316034514573652620673"}};
+    data2["6"]  = {{"base","3"},{"value","2122212201122002221120200210011020220200"}};
+    data2["7"]  = {{"base","3"},{"value","20120221122211000100210021102001201112121"}};
+    data2["8"]  = {{"base","6"},{"value","20220554335330240002224253"}};
+    data2["9"]  = {{"base","12"},{"value","45153788322a1255483"}};
+    data2["10"] = {{"base","7"},{"value","1101613130313526312514143"}};
+    int k2 = 7;
+
+    auto coeffs2 = solvePolynomialExact(data2, k2);
+    cout << "Testcase 2 coefficients: ";
+    printCoeffs(coeffs2);
+
+    return 0;
+}
